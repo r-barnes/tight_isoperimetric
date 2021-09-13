@@ -1,5 +1,6 @@
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
-#include <CGAL/Polygon_2.h>
+#include <CGAL/IO/WKT.h>
+#include <CGAL/Polygon_with_holes_2.h>
 #include <CGAL/Segment_Delaunay_graph_2.h>
 #include <CGAL/Segment_Delaunay_graph_adaptation_policies_2.h>
 #include <CGAL/Segment_Delaunay_graph_adaptation_traits_2.h>
@@ -7,10 +8,10 @@
 #include <CGAL/squared_distance_2.h>
 #include <CGAL/Voronoi_diagram_2.h>
 
-#include <cassert>
-#include <cmath>
+#include <deque>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 
 typedef CGAL::Exact_predicates_inexact_constructions_kernel            K;
@@ -29,13 +30,13 @@ typedef VoronoiDiagram::Ccb_halfedge_circulator    Ccb_halfedge_circulator;
 typedef VoronoiDiagram::Bounded_halfedges_iterator BHE_Iter;
 typedef VoronoiDiagram::Halfedge                   Halfedge;
 typedef VoronoiDiagram::Vertex                     Vertex;
-typedef CGAL::Polygon_2<K>                         Polygon_2;
-
+typedef CGAL::Polygon_with_holes_2<K> Polygon;
+typedef std::deque<Polygon> MultiPolygon;
 
 /// Holds a more accessible description of the Voronoi diagram
 struct VoronoiData {
-  /// List of vertices comprising the Voronoi diagram
-  std::vector<Vertex_handle> vertex_handles;
+  /// Map of vertices comprising the Voronoi diagram
+  std::map<Vertex_handle, int> vertex_handles;
   /// List of edges in the diagram (pairs of the vertices above)
   std::vector<std::pair<int, int>> edges;
   /// Medial axis up governor. 1:1 correspondance with edges above.
@@ -45,43 +46,43 @@ struct VoronoiData {
 };
 
 
-/// Read @p filename to obtain shape boundary
-std::vector<Point_2> get_boundary_points_from_file(const std::string& filename){
-  std::vector<Point_2> points;
-  {
-    std::ifstream fp(filename);
-    if(!fp.good()){
-      throw std::runtime_error("Couldn't open file '" + filename + "'!");
+/// Read well-known text from @p filename to obtain shape boundary
+MultiPolygon get_wkt_from_file(const std::string& filename){
+  std::ifstream fin(filename);
+  MultiPolygon mp;
+  CGAL::read_multi_polygon_WKT(fin, mp);
+
+  if(mp.empty()){
+    throw std::runtime_error("WKT file '" + filename + "' was empty!");
+  }
+  for(const auto &poly: mp){
+    if(poly.outer_boundary().size()==0){
+      throw std::runtime_error("WKT file '" + filename + "' contained a polygon without an outer boundary!");
     }
-
-    double a;
-    double b;
-    while (fp >> a >> b) {
-      points.emplace_back(a,b);
-    }
   }
 
-  if(points.empty()){
-    throw std::runtime_error("Points file '" + filename + "' was empty!");
-  }
-
-  // Make sure the points describe a closed loop
-  if(points.front()!=points.back()){
-    points.push_back(points.front());
-  }
-
-  return points;
+  return mp;
 }
 
 
 /// Converts a list of points (should be a closed loop) into a Voronoi diagram
-VoronoiDiagram convert_point_list_to_voronoi_diagram(const std::vector<Point_2> &points){
+VoronoiDiagram convert_mp_to_voronoi_diagram(const MultiPolygon &mp){
   VoronoiDiagram vd;
 
-  // Define sites
-  for (std::size_t i = 0; i<points.size()-1; i++) {
-    vd.insert(Site_2::construct_site_2(points[i], points[i+1]));
+  const auto add_segments_to_vd = [&](const auto &poly){
+    for(std::size_t i=0;i<poly.size();i++){
+      vd.insert(Site_2::construct_site_2(poly[i], poly[(i+1)%poly.size()]));
+    }
+  };
+
+  for(const auto &poly: mp){                    // For each polygon in MultiPolygon
+    std::cout<<poly<<std::endl;                 // Print polygon to screen for debugging
+    add_segments_to_vd(poly.outer_boundary());  // Add the outer boundary
+    for(const auto &hole : poly.holes()){       // And any holes
+      add_segments_to_vd(hole);
+    }
   }
+
   if(!vd.is_valid()){
     throw std::runtime_error("Voronoi Diagram was not valid!");
   }
@@ -93,14 +94,31 @@ VoronoiDiagram convert_point_list_to_voronoi_diagram(const std::vector<Point_2> 
 /// Find an `item` in `v` or add it if not present.
 /// Returns the index of `item`'s location
 template<class T, class U>
-int find_or_add(std::vector<T> &v, const U& item){
-  auto idx = std::find(v.begin(), v.end(), item);
-  if(idx == v.end()){
-    v.push_back(item);
-    idx = v.end() - 1;
+int find_or_add(std::map<T, int> &c, const U& item){
+  // Map means we can do this in log(N) time
+  if(c.count(item) == 0){
+    c.emplace(item, c.size());
+    return c.size() - 1;
   }
 
-  return std::distance(v.begin(), idx);
+  return c.at(item);
+}
+
+
+/// Convert a map of <T, int> pairs to a vector of `T` ordered by increasing int
+template<class T>
+std::vector<T> map_to_ordered_vector(const std::map<T, int> &m){
+  std::vector<std::pair<T, int>> to_sort(m.begin(), m.end());
+  std::sort(to_sort.begin(), to_sort.end(), [](const auto &a, const auto &b){
+    return a.second < b.second;
+  });
+
+  std::vector<T> ret;
+  std::transform(begin(to_sort), end(to_sort), std::back_inserter(ret),
+    [](auto const& pair){ return pair.first; }
+  );
+
+  return ret;
 }
 
 
@@ -109,7 +127,7 @@ VoronoiData get_voronoi_data(const VoronoiDiagram &vd){
 
   // The Voronoi diagram is comprised of a number of vertices connected by lines
   // Here, we go through each edge of the Voronoi diagram and determine which
-  // vertices it's incident on. We add these vertices to ret.vertex_handles
+  // vertices it's incident on. We add these vertices to `ret.vertex_handles`
   // so that they will have unique ids.
 
   // The `up` and `down` refer to the medial axis governors - that which
@@ -145,26 +163,29 @@ int main(int argc, char** argv) {
 
   CGAL::set_pretty_mode(std::cout);
 
-  const auto points = get_boundary_points_from_file(argv[1]);
-  const auto voronoi = convert_point_list_to_voronoi_diagram(points);
+  const auto mp = get_wkt_from_file(argv[1]);
+  const auto voronoi = convert_mp_to_voronoi_diagram(mp);
   const auto vdata = get_voronoi_data(voronoi);
 
   // Print the points which collectively comprise the Voronoi diagram
   {
-    std::ofstream fout("voronoi_points.txt");
-    for (const auto &vhti : vdata.vertex_handles) {
-      fout << vhti->point().x() << " " << vhti->point().y() << std::endl;
+    std::ofstream fout("voronoi_points.csv");
+    fout<<"x,y"<<std::endl;
+    for (const auto &vh : map_to_ordered_vector(vdata.vertex_handles)) {
+      fout << vh->point().x() << "," << vh->point().y() << std::endl;
     }
   }
 
   // Print out the edges of the Voronoi diagram
   {
-    std::ofstream fout("voronoi_edges.txt");
+    std::ofstream fout("voronoi_edges.csv");
+    fout<<"SourceIdx,TargetIdx,UpGovernorIsPoint,DownGovernorIsPoint"<<std::endl;
     for (std::size_t i = 0; i < vdata.edges.size(); i++) {
-      fout << vdata.edges[i].first       << " "
-            << vdata.edges[i].second      << " "
-            << vdata.ups[i]->is_point()   << " "
-            << vdata.downs[i]->is_point() << std::endl;
+      fout << vdata.edges[i].first        << ","
+            << vdata.edges[i].second      << ","
+            << vdata.ups[i]->is_point()   << "," // Is up-governor a point?
+            << vdata.downs[i]->is_point()        // Is down-governor a point?
+            << std::endl;
     }
   }
 
