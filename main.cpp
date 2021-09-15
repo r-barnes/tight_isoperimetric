@@ -16,6 +16,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <unordered_set>
 
 typedef CGAL::Exact_predicates_inexact_constructions_kernel            K;
 typedef CGAL::Segment_Delaunay_graph_traits_2<K>                       Gt;
@@ -35,6 +36,18 @@ typedef VoronoiDiagram::Halfedge                   Halfedge;
 typedef VoronoiDiagram::Vertex                     Vertex;
 typedef CGAL::Polygon_with_holes_2<K> Polygon;
 typedef std::deque<Polygon> MultiPolygon;
+
+struct Point2Hash {
+  size_t operator()(const Point_2 &pt) const {
+    std::hash<double> hasher;
+    auto seed = hasher(pt.x());
+    seed ^= hasher(pt.y()) + 0x9e3779b9 + (seed<<6) + (seed>>2);
+    return seed;
+  }
+};
+
+typedef std::unordered_set<Point_2, Point2Hash> Point2Set;
+
 
 /// Holds a more accessible description of the Voronoi diagram
 struct VoronoiData {
@@ -165,6 +178,47 @@ std::set<Vertex_handle> identify_vertex_handles_inside_mp(const VoronoiDiagram &
   return interior;
 }
 
+Point2Set identify_concave_points_of_mp(const MultiPolygon &mp){
+  Point2Set concave_points;
+
+  // Determine cross product, given three points
+  const auto z_cross_product = [](const Point_2 &pt1, const Point_2 &pt2, const Point_2 &pt3){
+    const auto dx1 = pt2.x() - pt1.x();
+    const auto dy1 = pt2.y() - pt1.y();
+    const auto dx2 = pt3.x() - pt2.x();
+    const auto dy2 = pt3.y() - pt2.y();
+    return dx1 * dy2 - dy1 * dx2;
+  };
+
+  // Loop through all the points in a polygon and get their cross products
+  // Sense should be `1` for outer boundaries and `-1` for holes (since holes)
+  // will have points facing outward.
+  const auto consider_polygon = [&](const auto &poly, const double sense){
+    for(size_t i=0;i<poly.size()+1;i++){
+      const auto zcp = z_cross_product(
+        poly[(i + 0) % poly.size()],
+        poly[(i + 1) % poly.size()],
+        poly[(i + 2) % poly.size()]
+      );
+      if(sense*zcp < 0){
+        concave_points.insert(poly[(i + 1) % poly.size()]);
+      }
+    }
+  };
+
+  // Loop over the polygons of the MultiPolygon, as well as their holes
+  for(const auto &poly: mp){
+    // Outer boundary has positive sense
+    consider_polygon(poly.outer_boundary(), 1);
+    for(const auto &hole: poly.holes()){
+      // Inner boundaries (holes) have negative (opposite) sense
+      consider_polygon(hole, -1);
+    }
+  }
+
+  return concave_points;
+}
+
 VoronoiData get_voronoi_data_filtered_to_mp(
   const VoronoiDiagram &vd,
   const MultiPolygon &mp
@@ -172,6 +226,11 @@ VoronoiData get_voronoi_data_filtered_to_mp(
   VoronoiData ret;
 
   const auto interior = identify_vertex_handles_inside_mp(vd, mp);
+  const auto concave_points = identify_concave_points_of_mp(mp);
+
+  const auto pconcave = [&](const Point_2 &pt){
+    return concave_points.count(pt) != 0;
+  };
 
   // The Voronoi diagram is comprised of a number of vertices connected by lines
   // Here, we go through each edge of the Voronoi diagram and determine which
@@ -192,6 +251,10 @@ VoronoiData get_voronoi_data_filtered_to_mp(
     // Filter Voronoi diagram to only the part in the interior of the
     // MultiPolygon
     if(interior.count(v1p)==0 || interior.count(v2p)==0){
+      continue;
+    }
+
+    if(pconcave(v1p->point()) || pconcave(v2p->point())){
       continue;
     }
 
