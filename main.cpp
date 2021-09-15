@@ -1,3 +1,4 @@
+#include <CGAL/Boolean_set_operations_2.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/IO/WKT.h>
 #include <CGAL/Polygon_with_holes_2.h>
@@ -8,10 +9,12 @@
 #include <CGAL/squared_distance_2.h>
 #include <CGAL/Voronoi_diagram_2.h>
 
+#include <algorithm>
 #include <deque>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 
 typedef CGAL::Exact_predicates_inexact_constructions_kernel            K;
@@ -121,9 +124,54 @@ std::vector<T> map_to_ordered_vector(const std::map<T, int> &m){
   return ret;
 }
 
+std::set<Vertex_handle> identify_vertex_handles_inside_mp(const VoronoiDiagram &vd, const MultiPolygon &mp){
+  // Used to accelerate interior lookups by avoiding Point-in-Polygon checks for
+  // vertices we've already considered
+  std::set<Vertex_handle> considered;
+  // The set of interior vertices we are building
+  std::set<Vertex_handle> interior;
 
-VoronoiData get_voronoi_data(const VoronoiDiagram &vd){
+  for (
+      auto edge_iter = vd.bounded_halfedges_begin();
+      edge_iter != vd.bounded_halfedges_end();
+      edge_iter++
+  ) {
+    // Determine if an orientation implies an interior vertex
+    const auto inside = [](const auto &orientation){
+      return orientation == CGAL::ON_ORIENTED_BOUNDARY || orientation == CGAL::POSITIVE;
+    };
+
+    // Determine if a vertex is in the interior of the multipolygon and, if so,
+    // add it to `interior`
+    const auto vertex_in_mp_interior = [&](const Vertex_handle& vh){
+      if(considered.count(vh)==0){
+        considered.insert(vh);
+        const auto inside_of_a_poly = std::any_of(
+          mp.begin(), mp.end(), [&](const auto &poly) {
+            // return inside(poly.oriented_side(vh->point()));
+            return inside(CGAL::oriented_side(vh->point(), poly));
+          }
+        );
+        if(inside_of_a_poly){
+          interior.insert(vh);
+        }
+      }
+    };
+
+    vertex_in_mp_interior(edge_iter->source());
+    vertex_in_mp_interior(edge_iter->target());
+  }
+
+  return interior;
+}
+
+VoronoiData get_voronoi_data_filtered_to_mp(
+  const VoronoiDiagram &vd,
+  const MultiPolygon &mp
+){
   VoronoiData ret;
+
+  const auto interior = identify_vertex_handles_inside_mp(vd, mp);
 
   // The Voronoi diagram is comprised of a number of vertices connected by lines
   // Here, we go through each edge of the Voronoi diagram and determine which
@@ -141,6 +189,12 @@ VoronoiData get_voronoi_data(const VoronoiDiagram &vd){
     const Vertex_handle& v1p = halfedge.source();
     const Vertex_handle& v2p = halfedge.target();
 
+    // Filter Voronoi diagram to only the part in the interior of the
+    // MultiPolygon
+    if(interior.count(v1p)==0 || interior.count(v2p)==0){
+      continue;
+    }
+
     const auto id1 = find_or_add(ret.vertex_handles, v1p);
     const auto id2 = find_or_add(ret.vertex_handles, v2p);
 
@@ -154,6 +208,12 @@ VoronoiData get_voronoi_data(const VoronoiDiagram &vd){
   return ret;
 }
 
+/*
+void reduce_voronoi_data_to_medial_axis_of_mp(const MultiPolygon &mp, VoronoiData &vd){
+  // Now, we check each point to see if it falls inside or outside the
+  // MultiPolygon
+}*/
+
 
 int main(int argc, char** argv) {
   if(argc!=2){
@@ -165,7 +225,7 @@ int main(int argc, char** argv) {
 
   const auto mp = get_wkt_from_file(argv[1]);
   const auto voronoi = convert_mp_to_voronoi_diagram(mp);
-  const auto vdata = get_voronoi_data(voronoi);
+  const auto vdata = get_voronoi_data_filtered_to_mp(voronoi, mp);
 
   // Print the points which collectively comprise the Voronoi diagram
   {
