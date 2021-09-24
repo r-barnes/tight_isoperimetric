@@ -3,6 +3,7 @@
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/IO/WKT.h>
 #include <CGAL/Polygon_with_holes_2.h>
+#include <CGAL/Segment_2.h>
 #include <CGAL/Segment_Delaunay_graph_2.h>
 #include <CGAL/Segment_Delaunay_graph_adaptation_policies_2.h>
 #include <CGAL/Segment_Delaunay_graph_adaptation_traits_2.h>
@@ -12,6 +13,7 @@
 #include <graph_lite.h>
 
 #include <algorithm>
+#include <cmath>
 #include <deque>
 #include <fstream>
 #include <iostream>
@@ -28,6 +30,7 @@ typedef CGAL::Segment_Delaunay_graph_degeneracy_removal_policy_2<SDG2> AP;
 typedef CGAL::Voronoi_diagram_2<SDG2, AT, AP>      VoronoiDiagram;
 typedef AT::Site_2                                 Site_2;
 typedef AT::Point_2                                Point_2;
+typedef CGAL::Segment_2<K>                         Segment_2;
 typedef VoronoiDiagram::Locate_result              Locate_result;
 typedef VoronoiDiagram::Vertex_handle              Vertex_handle;
 typedef VoronoiDiagram::Face_handle                Face_handle;
@@ -76,6 +79,8 @@ struct MedialPoint {
   /// Index of MedialData.vertex_handles that ends the Voronoi edge this point
   /// was sampled from
   size_t end_handle;
+  /// Distance between the point and its support
+  double distance;
 };
 
 
@@ -357,6 +362,87 @@ MedialData filter_voronoi_diagram_to_medial_axis(
 }
 
 
+/// Distance between a point and a line segment
+/// From: https://stackoverflow.com/a/6853926/752843
+double point_to_line_segment_distance(const Point_2 &pt, const Segment_2 &seg){
+  const auto A = pt.x() - seg.source().x();
+  const auto B = pt.y() - seg.source().y();
+  const auto C = seg.target().x() - seg.source().x();
+  const auto D = seg.target().y() - seg.source().y();
+
+  const auto dot = A * C + B * D;
+  const auto len_sq = C * C + D * D;
+  double param = -1.0;
+
+  // In case of 0 length line
+  if (len_sq != 0){
+    param = dot / len_sq;
+  }
+
+  double xx;
+  double yy;
+  if (param < 0) {
+    xx = seg.source().x();
+    yy = seg.source().y();
+  } else if (param > 1) {
+    xx = seg.target().x();
+    yy = seg.target().y();
+  } else {
+    xx = seg.source().x() + param * C;
+    yy = seg.source().y() + param * D;
+  }
+
+  const auto dx = pt.x() - xx;
+  const auto dy = pt.y() - yy;
+  return std::hypot(dx, dy);
+}
+
+
+/// Distance between two points
+double point_to_point_distance(const Point_2 &pt, const Point_2 &o){
+  return std::hypot(pt.x()-o.x(), pt.y()-o.y());
+}
+
+
+/// Distance between a point and a site
+double point_to_site_distance(const Point_2 &pt, const Site_2 &site){
+  if (site.is_point()) {
+    return point_to_point_distance(pt, site.point());
+  } else {
+    return point_to_line_segment_distance(pt, site.segment());
+  }
+}
+
+
+/// Given 2 sites returns the minimum distance between the point and both of them
+double point_to_min_site_distance(const Point_2 &pt, const Site_2 &site1, const Site_2 &site2){
+  return std::min(point_to_site_distance(pt, site1), point_to_site_distance(pt, site2));
+}
+
+
+//       const auto& s1 = ma_data.ups[i]->site();
+//       if (s1.is_point()) {
+//         fout << "Point(" << s1.point().x() << "," << s1.point().y() << ") ";
+//       } else {
+//         fout << "Line("
+//           << s1.segment().source().x() << ","
+//           << s1.segment().source().y() << ","
+//           << s1.segment().target().x() << ","
+//           << s1.segment().target().y() << ") ";
+//       }
+
+//       const auto& s2 = ma_data.downs[i]->site();
+//       if (s2.is_point()) {
+//         fout << "Point(" << s2.point().x() << "," << s2.point().y() << ")";
+//       } else {
+//         fout << "Line("
+//           << s2.segment().source().x() << ","
+//           << s2.segment().source().y() << ","
+//           << s2.segment().target().x() << ","
+//           << s2.segment().target().y() << ")";
+//       }
+
+
 MedialGraph get_medial_axis_graph(const MedialData &md){
   MedialGraph mg;
 
@@ -368,9 +454,9 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
       .pt = vh->point(),
       .vd_vertex = true,
       .start_handle = vertex_id,
-      .end_handle = vertex_id
+      .end_handle = vertex_id,
+      .distance = point_to_site_distance(vh->point(), md.ups.at(i)->site())
     });
-    //TODO: Calculate distances to the supports
     vertex_id++;
   }
 
@@ -380,13 +466,17 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
     const auto &evh = md.vertex_handles.at(edge.second); // End vertex
     Interpolator interp(svh->point(), evh->point());
     for(int t=1;t<STEPS;t++){
+      // Location of the interpolated point
+      const auto interp_point = interp(t/static_cast<double>(STEPS));
+
       mg.add_node_with_prop(vertex_id, MedialPoint{
-        .pt = interp(t), // Location of the interpolated point
+        .pt = interp_point,
         .vd_vertex = false,
         .start_handle = edge.first,
-        .end_handle = edge.second
+        .end_handle = edge.second,
+        .distance = point_to_min_site_distance(interp_point, md.ups.at(edge.first)->site(), md.ups.at(edge.second)->site())
       });
-      //TODO: Calculate distances to the supports
+
       if(t==1){
         mg.add_edge(edge.first, vertex_id);
       } else if(t==STEPS-1){
@@ -402,6 +492,16 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
 }
 
 
+/// Prints the points of the medial graph and their distances from supports as CSV
+void print_medial_graph_points_and_distances(const MedialGraph &mg, const std::string &filename){
+  std::ofstream fout(filename);
+  fout<<"x,y,distance"<<std::endl;
+  for (const auto&& [node, node_prop, neighbors_view]: mg) {
+    fout<<node_prop.pt.x()<<","<<node_prop.pt.y()<<","<<node_prop.distance<<std::endl;
+  }
+}
+
+
 int main(int argc, char** argv) {
   if(argc!=2){
       std::cerr<<"Syntax: "<<argv[0]<<" <Shape Boundary WKT>"<<std::endl;
@@ -413,11 +513,11 @@ int main(int argc, char** argv) {
   const auto mp = get_wkt_from_file(argv[1]);
   const auto voronoi = convert_mp_to_voronoi_diagram(mp);
   const auto ma_data = filter_voronoi_diagram_to_medial_axis(voronoi, mp);
-
-  get_medial_axis_graph(ma_data);
+  const auto medial_graph = get_medial_axis_graph(ma_data);
 
   print_medial_axis_points(ma_data, "voronoi_points.csv");
   print_medial_axis_edges(ma_data, "voronoi_edges.csv");
+  print_medial_graph_points_and_distances(medial_graph, "medial_graph_points.csv");
 
   // Print out the sources on which those edges rely. A Voronoi edge can be
   // formed by constraints imposed by two edges, two points, or a point and an
