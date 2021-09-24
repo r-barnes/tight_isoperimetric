@@ -1,0 +1,3 @@
+[submodule "submodules/graphlite"]
+	path = submodules/graphlite
+	url = https://github.com/haasdo95/graphlite.git

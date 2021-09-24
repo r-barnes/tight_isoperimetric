@@ -9,6 +9,7 @@
 #include <CGAL/Segment_Delaunay_graph_traits_2.h>
 #include <CGAL/squared_distance_2.h>
 #include <CGAL/Voronoi_diagram_2.h>
+#include <graph_lite.h>
 
 #include <algorithm>
 #include <deque>
@@ -58,7 +59,7 @@ struct MedialData {
   /// Map of vertices comprising the Voronoi diagram
   std::vector<Vertex_handle> vertex_handles;
   /// List of edges in the diagram (pairs of the vertices above)
-  std::vector<std::pair<int, int>> edges;
+  std::vector<std::pair<size_t, size_t>> edges;
   /// Medial axis up governor. 1:1 correspondance with edges above.
   std::vector<VoronoiDiagram::Delaunay_graph::Vertex_handle> ups;
   /// Medial axis down governor. 1:1 correspondance with edges above.
@@ -71,13 +72,31 @@ struct MedialPoint {
   bool vd_vertex;
   /// Index of MedialData.vertex_handles that starts the Voronoi edge this point
   /// was sampled from
-  int start_handle;
+  size_t start_handle;
   /// Index of MedialData.vertex_handles that ends the Voronoi edge this point
   /// was sampled from
-  int end_handle;
-  /// Neighboring sampled points
-  std::vector<MedialPoint*> neighbours;
+  size_t end_handle;
 };
+
+
+typedef graph_lite::Graph<size_t, MedialPoint> MedialGraph;
+
+
+class Interpolator {
+ public:
+  Interpolator(const Point_2 &a, const Point_2 &b) : a(a), b(b) {}
+  // Returns points interpolated from a at t=0 to b at t=1
+  Point_2 operator()(const double t) const {
+    return {
+      std::lerp(a.x(), b.x(), t),
+      std::lerp(a.y(), b.y(), t)
+    };
+  }
+ private:
+  Point_2 a;
+  Point_2 b;
+};
+
 
 
 /// Read well-known text from @p filename to obtain shape boundary
@@ -338,10 +357,48 @@ MedialData filter_voronoi_diagram_to_medial_axis(
 }
 
 
-void sample_medial_axis(const MedialData &md){
-  for(const auto &edge: md.edges){
+MedialGraph get_medial_axis_graph(const MedialData &md){
+  MedialGraph mg;
 
+  size_t vertex_id = 0;
+
+  for(size_t i=0;i<md.vertex_handles.size();i++){
+    const auto &vh = md.vertex_handles.at(i);
+    mg.add_node_with_prop(vertex_id, MedialPoint{
+      .pt = vh->point(),
+      .vd_vertex = true,
+      .start_handle = vertex_id,
+      .end_handle = vertex_id
+    });
+    //TODO: Calculate distances to the supports
+    vertex_id++;
   }
+
+  constexpr auto STEPS = 100;
+  for(const auto &edge: md.edges){
+    const auto &svh = md.vertex_handles.at(edge.first);  // Start vertex
+    const auto &evh = md.vertex_handles.at(edge.second); // End vertex
+    Interpolator interp(svh->point(), evh->point());
+    for(int t=1;t<STEPS;t++){
+      mg.add_node_with_prop(vertex_id, MedialPoint{
+        .pt = interp(t), // Location of the interpolated point
+        .vd_vertex = false,
+        .start_handle = edge.first,
+        .end_handle = edge.second
+      });
+      //TODO: Calculate distances to the supports
+      if(t==1){
+        mg.add_edge(edge.first, vertex_id);
+      } else if(t==STEPS-1){
+        mg.add_edge(vertex_id, edge.second);
+      } else {
+        mg.add_edge(vertex_id - 1, vertex_id);
+      }
+      vertex_id++;
+    }
+  }
+
+  return mg;
 }
 
 
@@ -356,6 +413,8 @@ int main(int argc, char** argv) {
   const auto mp = get_wkt_from_file(argv[1]);
   const auto voronoi = convert_mp_to_voronoi_diagram(mp);
   const auto ma_data = filter_voronoi_diagram_to_medial_axis(voronoi, mp);
+
+  get_medial_axis_graph(ma_data);
 
   print_medial_axis_points(ma_data, "voronoi_points.csv");
   print_medial_axis_edges(ma_data, "voronoi_edges.csv");
