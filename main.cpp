@@ -1,3 +1,4 @@
+// Compile with: clang++ -DBOOST_ALL_NO_LIB -DCGAL_USE_GMPXX=1 -O2 -g -DNDEBUG -Wall -Wextra -pedantic -march=native -frounding-math main.cpp -lgmpxx -lmpfr -lgmp
 #include <CGAL/Boolean_set_operations_2.h>
 #include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
 #include <CGAL/IO/WKT.h>
@@ -37,28 +38,45 @@ typedef VoronoiDiagram::Vertex                     Vertex;
 typedef CGAL::Polygon_with_holes_2<K> Polygon;
 typedef std::deque<Polygon> MultiPolygon;
 
+/// Creates a hash of a Point_2, used for making O(1) point lookups
 struct Point2Hash {
   size_t operator()(const Point_2 &pt) const {
     std::hash<double> hasher;
     auto seed = hasher(pt.x());
+    // boost::hash_combine from https://stackoverflow.com/q/35985960/752843
     seed ^= hasher(pt.y()) + 0x9e3779b9 + (seed<<6) + (seed>>2);
     return seed;
   }
 };
 
-typedef std::unordered_set<Point_2, Point2Hash> Point2Set;
+typedef std::unordered_set<Point_2, Point2Hash> Point2_Set;
+typedef std::map<Vertex_handle, int> VH_Int_Map;
 
 
 /// Holds a more accessible description of the Voronoi diagram
-struct VoronoiData {
+struct MedialData {
   /// Map of vertices comprising the Voronoi diagram
-  std::map<Vertex_handle, int> vertex_handles;
+  std::vector<Vertex_handle> vertex_handles;
   /// List of edges in the diagram (pairs of the vertices above)
   std::vector<std::pair<int, int>> edges;
   /// Medial axis up governor. 1:1 correspondance with edges above.
   std::vector<VoronoiDiagram::Delaunay_graph::Vertex_handle> ups;
   /// Medial axis down governor. 1:1 correspondance with edges above.
   std::vector<VoronoiDiagram::Delaunay_graph::Vertex_handle> downs;
+};
+
+struct MedialPoint {
+  Point_2 pt;
+  /// True if the point is a vertex of the Voronoi diagram
+  bool vd_vertex;
+  /// Index of MedialData.vertex_handles that starts the Voronoi edge this point
+  /// was sampled from
+  int start_handle;
+  /// Index of MedialData.vertex_handles that ends the Voronoi edge this point
+  /// was sampled from
+  int end_handle;
+  /// Neighboring sampled points
+  std::vector<MedialPoint*> neighbours;
 };
 
 
@@ -81,12 +99,13 @@ MultiPolygon get_wkt_from_file(const std::string& filename){
 }
 
 
-/// Converts a list of points (should be a closed loop) into a Voronoi diagram
+/// Converts a MultiPolygon into its corresponding Voronoi diagram
 VoronoiDiagram convert_mp_to_voronoi_diagram(const MultiPolygon &mp){
   VoronoiDiagram vd;
 
   const auto add_segments_to_vd = [&](const auto &poly){
     for(std::size_t i=0;i<poly.size();i++){
+      // Modulus to close the loop
       vd.insert(Site_2::construct_site_2(poly[i], poly[(i+1)%poly.size()]));
     }
   };
@@ -107,10 +126,9 @@ VoronoiDiagram convert_mp_to_voronoi_diagram(const MultiPolygon &mp){
 }
 
 
-/// Find an `item` in `v` or add it if not present.
+/// Find @p item in collection @p c or add it if not present.
 /// Returns the index of `item`'s location
-template<class T, class U>
-int find_or_add(std::map<T, int> &c, const U& item){
+int find_or_add(VH_Int_Map &c, const Vertex_handle &item){
   // Map means we can do this in log(N) time
   if(c.count(item) == 0){
     c.emplace(item, c.size());
@@ -122,14 +140,15 @@ int find_or_add(std::map<T, int> &c, const U& item){
 
 
 /// Convert a map of <T, int> pairs to a vector of `T` ordered by increasing int
-template<class T>
-std::vector<T> map_to_ordered_vector(const std::map<T, int> &m){
-  std::vector<std::pair<T, int>> to_sort(m.begin(), m.end());
+std::vector<Vertex_handle> map_to_ordered_vector(const VH_Int_Map &m){
+  std::vector<std::pair<Vertex_handle, int>> to_sort(m.begin(), m.end());
+  to_sort.reserve(m.size());
   std::sort(to_sort.begin(), to_sort.end(), [](const auto &a, const auto &b){
     return a.second < b.second;
   });
 
-  std::vector<T> ret;
+  std::vector<Vertex_handle> ret;
+  ret.reserve(to_sort.size());
   std::transform(begin(to_sort), end(to_sort), std::back_inserter(ret),
     [](auto const& pair){ return pair.first; }
   );
@@ -137,7 +156,12 @@ std::vector<T> map_to_ordered_vector(const std::map<T, int> &m){
   return ret;
 }
 
-std::set<Vertex_handle> identify_vertex_handles_inside_mp(const VoronoiDiagram &vd, const MultiPolygon &mp){
+
+/// Find vertex handles which are in the interior of the MultiPolygon
+std::set<Vertex_handle> identify_vertex_handles_inside_mp(
+  const VoronoiDiagram &vd,
+  const MultiPolygon &mp
+){
   // Used to accelerate interior lookups by avoiding Point-in-Polygon checks for
   // vertices we've already considered
   std::set<Vertex_handle> considered;
@@ -157,20 +181,26 @@ std::set<Vertex_handle> identify_vertex_handles_inside_mp(const VoronoiDiagram &
     // Determine if a vertex is in the interior of the multipolygon and, if so,
     // add it to `interior`
     const auto vertex_in_mp_interior = [&](const Vertex_handle& vh){
-      if(considered.count(vh)==0){
-        considered.insert(vh);
-        const auto inside_of_a_poly = std::any_of(
-          mp.begin(), mp.end(), [&](const auto &poly) {
-            // return inside(poly.oriented_side(vh->point()));
-            return inside(CGAL::oriented_side(vh->point(), poly));
-          }
-        );
-        if(inside_of_a_poly){
-          interior.insert(vh);
+      // Skip vertices which have already been considered, since a vertex may
+      // be connected to multiple halfedges
+      if(considered.count(vh)!=0){
+        return;
+      }
+      // Ensure we don't look at a vertex twice
+      considered.insert(vh);
+      // Determine if the vertex is inside of any polygon of the MultiPolygon
+      const auto inside_of_a_poly = std::any_of(
+        mp.begin(), mp.end(), [&](const auto &poly) {
+          return inside(CGAL::oriented_side(vh->point(), poly));
         }
+      );
+      // If the vertex was inside the MultiPolygon make a note of it
+      if(inside_of_a_poly){
+        interior.insert(vh);
       }
     };
 
+    // Check both vertices of the current halfedge of the Voronoi diagram
     vertex_in_mp_interior(edge_iter->source());
     vertex_in_mp_interior(edge_iter->target());
   }
@@ -178,10 +208,15 @@ std::set<Vertex_handle> identify_vertex_handles_inside_mp(const VoronoiDiagram &
   return interior;
 }
 
-Point2Set identify_concave_points_of_mp(const MultiPolygon &mp){
-  Point2Set concave_points;
 
-  // Determine cross product, given three points
+/// The medial axis is formed by building a Voronoi diagram and then removing
+/// the edges of the diagram which connect to the concave points of the
+/// MultiPolygon. Here, we identify those concave points
+Point2_Set identify_concave_points_of_mp(const MultiPolygon &mp){
+  Point2_Set concave_points;
+
+  // Determine cross-product, given three points. The sign of the cross-product
+  // determines whether the point is concave or convex.
   const auto z_cross_product = [](const Point_2 &pt1, const Point_2 &pt2, const Point_2 &pt3){
     const auto dx1 = pt2.x() - pt1.x();
     const auto dy1 = pt2.y() - pt1.y();
@@ -190,8 +225,9 @@ Point2Set identify_concave_points_of_mp(const MultiPolygon &mp){
     return dx1 * dy2 - dy1 * dx2;
   };
 
-  // Loop through all the points in a polygon and get their cross products
-  // Sense should be `1` for outer boundaries and `-1` for holes (since holes)
+  // Loop through all the points in a polygon, get their cross products, and
+  // add any concave points to the set we're building.
+  // `sense` should be `1` for outer boundaries and `-1` for holes, since holes
   // will have points facing outward.
   const auto consider_polygon = [&](const auto &poly, const double sense){
     for(size_t i=0;i<poly.size()+1;i++){
@@ -219,15 +255,42 @@ Point2Set identify_concave_points_of_mp(const MultiPolygon &mp){
   return concave_points;
 }
 
-VoronoiData get_voronoi_data_filtered_to_mp(
+
+/// Print the points which collectively comprise the medial axis
+void print_medial_axis_points(const MedialData &md, const std::string &filename){
+  std::ofstream fout(filename);
+  fout<<"x,y"<<std::endl;
+  for (const auto &vh : md.vertex_handles) {
+    fout << vh->point().x() << "," << vh->point().y() << std::endl;
+  }
+}
+
+
+/// Prints the edges of the medial diagram
+void print_medial_axis_edges(const MedialData &md, const std::string &filename){
+  std::ofstream fout(filename);
+  fout<<"SourceIdx,TargetIdx,UpGovernorIsPoint,DownGovernorIsPoint"<<std::endl;
+  for (std::size_t i = 0; i < md.edges.size(); i++) {
+    fout << md.edges[i].first        << ","
+          << md.edges[i].second      << ","
+          << md.ups[i]->is_point()   << "," // Is up-governor a point?
+          << md.downs[i]->is_point()        // Is down-governor a point?
+          << std::endl;
+  }
+}
+
+
+MedialData filter_voronoi_diagram_to_medial_axis(
   const VoronoiDiagram &vd,
   const MultiPolygon &mp
 ){
-  VoronoiData ret;
+  MedialData ret;
+  VH_Int_Map handles;
 
   const auto interior = identify_vertex_handles_inside_mp(vd, mp);
   const auto concave_points = identify_concave_points_of_mp(mp);
 
+  // Returns true if a point is a concave point of the MultiPolygon
   const auto pconcave = [&](const Point_2 &pt){
     return concave_points.count(pt) != 0;
   };
@@ -254,13 +317,14 @@ VoronoiData get_voronoi_data_filtered_to_mp(
       continue;
     }
 
+    // Drop those edges of the diagram which are not part of the medial axis
     if(pconcave(v1p->point()) || pconcave(v2p->point())){
       continue;
     }
 
-    const auto id1 = find_or_add(ret.vertex_handles, v1p);
-    const auto id2 = find_or_add(ret.vertex_handles, v2p);
-
+    // Get unique ids for edge vertex handle that's part of the medial axis
+    const auto id1 = find_or_add(handles, v1p);
+    const auto id2 = find_or_add(handles, v2p);
     ret.edges.emplace_back(id1, id2);
 
     // Keep track of the medial axis governors
@@ -268,19 +332,22 @@ VoronoiData get_voronoi_data_filtered_to_mp(
     ret.downs.push_back(halfedge.down());
   }
 
+  ret.vertex_handles = map_to_ordered_vector(handles);
+
   return ret;
 }
 
-/*
-void reduce_voronoi_data_to_medial_axis_of_mp(const MultiPolygon &mp, VoronoiData &vd){
-  // Now, we check each point to see if it falls inside or outside the
-  // MultiPolygon
-}*/
+
+void sample_medial_axis(const MedialData &md){
+  for(const auto &edge: md.edges){
+
+  }
+}
 
 
 int main(int argc, char** argv) {
   if(argc!=2){
-      std::cerr<<"Syntax: "<<argv[0]<<" <Shape Boundary>"<<std::endl;
+      std::cerr<<"Syntax: "<<argv[0]<<" <Shape Boundary WKT>"<<std::endl;
       return -1;
   }
 
@@ -288,37 +355,18 @@ int main(int argc, char** argv) {
 
   const auto mp = get_wkt_from_file(argv[1]);
   const auto voronoi = convert_mp_to_voronoi_diagram(mp);
-  const auto vdata = get_voronoi_data_filtered_to_mp(voronoi, mp);
+  const auto ma_data = filter_voronoi_diagram_to_medial_axis(voronoi, mp);
 
-  // Print the points which collectively comprise the Voronoi diagram
-  {
-    std::ofstream fout("voronoi_points.csv");
-    fout<<"x,y"<<std::endl;
-    for (const auto &vh : map_to_ordered_vector(vdata.vertex_handles)) {
-      fout << vh->point().x() << "," << vh->point().y() << std::endl;
-    }
-  }
-
-  // Print out the edges of the Voronoi diagram
-  {
-    std::ofstream fout("voronoi_edges.csv");
-    fout<<"SourceIdx,TargetIdx,UpGovernorIsPoint,DownGovernorIsPoint"<<std::endl;
-    for (std::size_t i = 0; i < vdata.edges.size(); i++) {
-      fout << vdata.edges[i].first        << ","
-            << vdata.edges[i].second      << ","
-            << vdata.ups[i]->is_point()   << "," // Is up-governor a point?
-            << vdata.downs[i]->is_point()        // Is down-governor a point?
-            << std::endl;
-    }
-  }
+  print_medial_axis_points(ma_data, "voronoi_points.csv");
+  print_medial_axis_edges(ma_data, "voronoi_edges.csv");
 
   // Print out the sources on which those edges rely. A Voronoi edge can be
   // formed by constraints imposed by two edges, two points, or a point and an
   // edge
   {
     std::ofstream fout("voronoi_sources.txt");
-    for (std::size_t i = 0; i < vdata.ups.size(); i++) {
-      const auto& s1 = vdata.ups[i]->site();
+    for (std::size_t i = 0; i < ma_data.ups.size(); i++) {
+      const auto& s1 = ma_data.ups[i]->site();
       if (s1.is_point()) {
         fout << "Point(" << s1.point().x() << "," << s1.point().y() << ") ";
       } else {
@@ -329,7 +377,7 @@ int main(int argc, char** argv) {
           << s1.segment().target().y() << ") ";
       }
 
-      const auto& s2 = vdata.downs[i]->site();
+      const auto& s2 = ma_data.downs[i]->site();
       if (s2.is_point()) {
         fout << "Point(" << s2.point().x() << "," << s2.point().y() << ")";
       } else {
