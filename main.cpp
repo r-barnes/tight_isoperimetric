@@ -455,13 +455,28 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
       .vd_vertex = true,
       .start_handle = vertex_id,
       .end_handle = vertex_id,
-      .distance = point_to_site_distance(vh->point(), md.ups.at(i)->site())
+      .distance = -1  // We'll fix this below
     });
     vertex_id++;
   }
 
+  // Fix distances to vertex handles
+  for(size_t e=0;e<md.edges.size();e++){
+    const auto &edge = md.edges.at(e);
+    auto &spt = mg.node_prop(mg.find(edge.first));
+    spt.distance = point_to_min_site_distance(
+      spt.pt, md.ups.at(e)->site(), md.downs.at(e)->site()
+    );
+    auto &ept = mg.node_prop(mg.find(edge.second));
+    ept.distance = point_to_min_site_distance(
+      ept.pt, md.ups.at(e)->site(), md.downs.at(e)->site()
+    );
+  }
+
+  // Get distances to all other points
   constexpr auto STEPS = 100;
-  for(const auto &edge: md.edges){
+  for(size_t e=0;e<md.edges.size();e++){
+    const auto &edge = md.edges.at(e);
     const auto &svh = md.vertex_handles.at(edge.first);  // Start vertex
     const auto &evh = md.vertex_handles.at(edge.second); // End vertex
     Interpolator interp(svh->point(), evh->point());
@@ -474,7 +489,9 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
         .vd_vertex = false,
         .start_handle = edge.first,
         .end_handle = edge.second,
-        .distance = point_to_min_site_distance(interp_point, md.ups.at(edge.first)->site(), md.ups.at(edge.second)->site())
+        .distance = point_to_min_site_distance(
+          interp_point, md.ups.at(e)->site(), md.downs.at(e)->site()
+        )
       });
 
       if(t==1){

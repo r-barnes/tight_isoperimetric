@@ -22,7 +22,8 @@ for geom in fig4.geoms:
 
 # Output file from C++ medial graph code
 mgp = np.loadtxt("build/medial_graph_points.csv", dtype=float, skiprows=1, delimiter=',')
-sampled = mgp[mgp[:,2]>80,:]
+# sampled = mgp[mgp[:,2]>80,:]
+sampled = mgp
 ax.scatter(sampled[:,0], sampled[:,1], c=sampled[:,2], cmap='Greens')
 
 
