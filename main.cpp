@@ -49,6 +49,7 @@ typedef CGAL::Polygon_with_holes_2<K>              Polygon;
 typedef std::deque<Polygon>                        MultiPolygon;
 
 typedef K::Circle_2                                Circle_2;
+typedef K::Vector_2                                Vector_2;
 typedef CGAL::Gps_circle_segment_traits_2<K>       Traits_2;
 typedef CGAL::General_polygon_set_2<Traits_2>      Polygon_set_2;
 typedef Traits_2::General_polygon_2                Polygon_2;
@@ -96,7 +97,7 @@ struct MedialPoint {
   /// was sampled from
   size_t end_handle;
   /// Distance between the point and its support
-  K::FT distance;
+  K::FT squared_distance;
 };
 
 
@@ -180,7 +181,6 @@ int find_or_add(VH_Int_Map &c, const Vertex_handle &item){
 /// Convert a map of <T, int> pairs to a vector of `T` ordered by increasing int
 std::vector<Vertex_handle> map_to_ordered_vector(const VH_Int_Map &m){
   std::vector<std::pair<Vertex_handle, int>> to_sort(m.begin(), m.end());
-  to_sort.reserve(m.size());
   std::sort(to_sort.begin(), to_sort.end(), [](const auto &a, const auto &b){
     return a.second < b.second;
   });
@@ -363,6 +363,12 @@ MedialData filter_voronoi_diagram_to_medial_axis(
     // Get unique ids for edge vertex handle that's part of the medial axis
     const auto id1 = find_or_add(handles, v1p);
     const auto id2 = find_or_add(handles, v2p);
+
+    // Avoid adding undirected edge twice
+    if(id1>id2){
+      continue;
+    }
+
     ret.edges.emplace_back(id1, id2);
 
     // Keep track of the medial axis governors
@@ -377,7 +383,6 @@ MedialData filter_voronoi_diagram_to_medial_axis(
 
 
 /// Distance between a point and a line segment
-/// From: https://stackoverflow.com/a/6853926/752843
 auto point_to_line_segment_distance(const Point_2 &pt, const Segment_2 &seg){
   return CGAL::squared_distance(pt, seg);
 }
@@ -401,6 +406,7 @@ auto point_to_site_distance(const Point_2 &pt, const Site_2 &site){
 
 /// Given 2 sites returns the minimum distance between the point and both of them
 auto point_to_min_site_distance(const Point_2 &pt, const Site_2 &site1, const Site_2 &site2){
+  std::cout<<"dist "<<point_to_site_distance(pt, site1)<<" "<<point_to_site_distance(pt, site2)<<std::endl;
   return std::min(point_to_site_distance(pt, site1), point_to_site_distance(pt, site2));
 }
 
@@ -410,14 +416,13 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
 
   size_t vertex_id = 0;
 
-  for(size_t i=0;i<md.vertex_handles.size();i++){
-    const auto &vh = md.vertex_handles.at(i);
+  for(const auto &vh: md.vertex_handles){
     mg.add_node_with_prop(vertex_id, MedialPoint{
       .pt = vh->point(),
       .vd_vertex = true,
       .start_handle = vertex_id,
       .end_handle = vertex_id,
-      .distance = -1  // We'll fix this below
+      .squared_distance = -1  // We'll fix this below
     });
     vertex_id++;
   }
@@ -426,16 +431,19 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
   for(size_t e=0;e<md.edges.size();e++){
     const auto &edge = md.edges.at(e);
     auto &spt = mg.node_prop(mg.find(edge.first));
-    spt.distance = point_to_min_site_distance(
+    spt.squared_distance = point_to_min_site_distance(
       spt.pt, md.ups.at(e)->site(), md.downs.at(e)->site()
     );
     auto &ept = mg.node_prop(mg.find(edge.second));
-    ept.distance = point_to_min_site_distance(
+    ept.squared_distance = point_to_min_site_distance(
       ept.pt, md.ups.at(e)->site(), md.downs.at(e)->site()
     );
+    // mg.add_edge(edge.first, edge.second); //TODO
   }
 
-  // Get distances to all other points
+  // NOTE: No squared_distance should be -1 any more
+
+  // Get distances to all other points and build a graph from there
   constexpr auto STEPS = 100;
   for(size_t e=0;e<md.edges.size();e++){
     const auto &edge = md.edges.at(e);
@@ -451,17 +459,22 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
         .vd_vertex = false,
         .start_handle = edge.first,
         .end_handle = edge.second,
-        .distance = point_to_min_site_distance(
+        .squared_distance = point_to_min_site_distance(
           interp_point, md.ups.at(e)->site(), md.downs.at(e)->site()
         )
       });
 
       if(t==1){
         mg.add_edge(edge.first, vertex_id);
+        std::cout<<"graph "<<edge.first<<"-"<<vertex_id<<std::endl;
       } else if(t==STEPS-1){
+        mg.add_edge(vertex_id - 1, vertex_id);
         mg.add_edge(vertex_id, edge.second);
+        std::cout<<"graph "<<(vertex_id - 1)<<"-"<<vertex_id<<std::endl;
+        std::cout<<"graph "<<vertex_id<<"-"<<edge.second<<std::endl;
       } else {
         mg.add_edge(vertex_id - 1, vertex_id);
+        std::cout<<"graph "<<(vertex_id - 1)<<"-"<<vertex_id<<std::endl;
       }
       vertex_id++;
     }
@@ -476,29 +489,104 @@ void print_medial_graph_points_and_distances(const MedialGraph &mg, const std::s
   std::ofstream fout(filename);
   fout<<"x,y,distance"<<std::endl;
   for (const auto&& [node, node_prop, neighbors_view]: mg) {
-    fout<<node_prop.pt.x()<<","<<node_prop.pt.y()<<","<<node_prop.distance<<std::endl;
+    fout<<node_prop.pt.x()<<","<<node_prop.pt.y()<<","<<node_prop.squared_distance<<std::endl;
+  }
+
+  std::ofstream fg("graph_connections");
+  for (const auto&& [node, node_prop, neighbors_view]: mg) {
+    const auto [nbegin, nend] = neighbors_view;
+    for(auto n=nbegin;n!=nend;++n){
+      fg<<node<<"-"<<(*n)<<std::endl;
+    }
   }
 }
 
 
+void draw_arc(const Circle_2 &circle, const Point_2 &start, const Point_2 &end, std::ostream &fout){
+  constexpr auto STEPS = 10;
+
+  const Vector_2 x_axis(1,0);
+  const auto start_angle = 0; //CGAL::angle(start - circle.center(), x_axis);
+  const auto ang_diff = 2*M_PI; //CGAL::angle(start, circle.center(), end);
+  const auto cx = circle.center().x();
+  const auto cy = circle.center().y();
+  const auto radius = std::sqrt(CGAL::to_double(circle.squared_radius()));
+  // auto px = start.x();
+  // auto py = start.y();
+  for(int i=0;i<STEPS;i++){
+    const auto t = i / static_cast<double>(STEPS);
+    const auto x = cx + radius * std::cos(start_angle + ang_diff*t);
+    const auto y = cy + radius * std::sin(start_angle + ang_diff*t);
+    // fout<<px<<","<<py<<","<<x<<","<<y<<std::endl;
+    fout<<x<<","<<y<<std::endl;
+    // px = x;
+    // py = y;
+  }
+}
+
 /// Constructs a polygon from a circle
-Polygon_2 construct_polygon_circle(const Point_2 &pt, const K::FT radius){
+Polygon_2 construct_polygon_circle(const Point_2 &pt, const K::FT squared_radius){
   // Subdivide the circle into two x-monotone arcs.
   Traits_2 traits;
-  Curve_2 curve (Circle_2(pt, radius));
-  std::list<CGAL::Object>  objects;
-  traits.make_x_monotone_2_object() (curve, std::back_inserter(objects));
-  std::cout<<"asize = "<<objects.size()<<" "<<radius<<std::endl;
-  CGAL_assertion (objects.size() == 2);
+  Curve_2 curve(Circle_2(pt, squared_radius));
+
+  // This output is correct (TODO)
+  // std::cout<<"circ "<<pt.x()<<","<<pt.y()<<","<<std::sqrt(CGAL::to_double(squared_radius))<<std::endl;
+
+  std::list<CGAL::Object> objects;
+  traits.make_x_monotone_2_object()(curve, std::back_inserter(objects));
+  CGAL_assertion(objects.size() == 2);
+
   // Construct the polygon.
   Polygon_2 pgn;
   X_monotone_curve_2 arc;
   std::list<CGAL::Object>::iterator iter;
   for (iter = objects.begin(); iter != objects.end(); ++iter) {
-    CGAL::assign (arc, *iter);
-    pgn.push_back (arc);
+    CGAL::assign(arc, *iter);
+        // TODO
+        // const Point_2 S = arc.source();
+        // const Point_2 T = arc.target();
+        // const Point_2 S(CGAL::to_double(arc.source().x()),CGAL::to_double(arc.source().y()));
+        // const Point_2 T(CGAL::to_double(arc.target().x()),CGAL::to_double(arc.target().y()));
+        // std::cout<<"arc "<<T.x()<<","<<T.y()<<std::endl;
+        // draw_arc(arc.supporting_circle(), S, T, std::cout);
+    pgn.push_back(arc);
   }
+
   return pgn;
+}
+
+
+
+
+void print_polygon_with_holes(const Polygon_with_holes_2 &pwh, std::string filename){
+  std::ofstream fout(filename);
+  fout<<std::setprecision(20);
+
+  const auto &outer_boundary = pwh.outer_boundary();
+  std::cout<<outer_boundary.area()<<std::endl;
+  for(auto cit=outer_boundary.curves_begin();cit!=outer_boundary.curves_end();++cit){
+    std::cout<<"cit area "<<cit->area()<<std::endl;
+    if(cit->is_linear()){
+      fout<<cit->source().x()<<","
+          <<cit->source().y()<<std::endl;
+          // <<cit->target().x()<<","
+          // <<cit->target().y()<<std::endl;
+    } else {
+      // Enable to show center lines
+      fout<<"circle "<<cit->supporting_circle().center().x()<<","<<cit->supporting_circle().center().y()<<std::endl;
+      continue;
+      if(cit->supporting_circle().orientation()==CGAL::COUNTERCLOCKWISE){
+        const Point_2 S(CGAL::to_double(cit->source().x()),CGAL::to_double(cit->source().y()));
+        const Point_2 T(CGAL::to_double(cit->target().x()),CGAL::to_double(cit->target().y()));
+        // fout<<T.x()<<","<<T.y()<<std::endl;
+        draw_arc(cit->supporting_circle(), S, T, fout);
+      } else {
+        //TODO
+        std::cout<<"TODO"<<std::endl;
+      }
+    }
+  }
 }
 
 
@@ -521,13 +609,13 @@ void iterate_graph(const MedialGraph &mg){
 
   //Find maximum
   const size_t max_node = std::get<0>(*std::max_element(mg.begin(), mg.end(), [&](const auto &a, const auto &b){
-    return std::get<1>(a).distance > std::get<1>(b).distance;
+    return std::get<1>(a).squared_distance < std::get<1>(b).squared_distance;
   }));
 
   std::unordered_set<size_t> visited;
 
   const auto cmp = [&](const size_t left, const size_t right) {
-    return mg.node_prop(left).distance > mg.node_prop(right).distance;
+    return mg.node_prop(left).squared_distance > mg.node_prop(right).squared_distance;
   };
   std::priority_queue<size_t, std::vector<size_t>, decltype(cmp)> pq(cmp);
   pq.push(max_node);
@@ -545,11 +633,11 @@ void iterate_graph(const MedialGraph &mg){
 
     const auto &props = mg.node_prop(c);
 
-    if(props.distance==0){
+    if(props.squared_distance==0){
       continue;
     }
 
-    gph.join(construct_polygon_circle(props.pt, props.distance));
+    gph.join(construct_polygon_circle(props.pt, props.squared_distance));
 
     const auto [nbr_begin, nbr_end] = mg.neighbors(c);
     for(auto n=nbr_begin;n!=nbr_end;++n){
@@ -558,6 +646,19 @@ void iterate_graph(const MedialGraph &mg){
       }
       pq.push(*n);
     }
+  }
+  std::cout<<std::endl;
+
+  std::cout<<"HIIIIIIIIIIIIIIIIII!"<<std::endl;
+  std::list<Polygon_with_holes_2> res;
+  gph.polygons_with_holes (std::back_inserter (res));
+  std::cout<<"pwh size = "<<res.size()<<std::endl;
+  std::copy (res.begin(), res.end(),
+             std::ostream_iterator<Polygon_with_holes_2>(std::cout, "\n"));
+  std::cout << std::endl;
+  for(const auto &r: res){
+    std::cout<<"r area = "<<r.outer_boundary().area()<<std::endl;
+    print_polygon_with_holes(r, "poly_holes.csv");
   }
 }
 
