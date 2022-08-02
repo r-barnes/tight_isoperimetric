@@ -18,14 +18,14 @@ if ( CGAL_FOUND )
 
   message(STATUS "Found CGAL: ${CGAL_LIBRARIES}")
 
-  add_executable(main src/main.cpp)
-  target_link_libraries(main ${CGAL_LIBRARIES} ${CGAL_3RD_PARTY_LIBRARIES} graphlite)
-  target_compile_options(main PRIVATE -Wall -Wextra -pedantic -march=native)
-  target_compile_features(main PRIVATE cxx_std_20)
-  add_to_cached_list( CGAL_EXECUTABLE_TARGETS main)
+  add_executable(tightiso src/main.cpp)
+  target_link_libraries(tightiso ${CGAL_LIBRARIES} ${CGAL_3RD_PARTY_LIBRARIES} graphlite)
+  target_compile_options(tightiso PRIVATE -Wall -Wextra -pedantic -march=native)
+  target_compile_features(tightiso PRIVATE cxx_std_20)
+  add_to_cached_list( CGAL_EXECUTABLE_TARGETS tightiso)
 
   # include(${CGAL_MODULES_DIR}/CGAL_add_test.cmake)
-  # cgal_add_compilation_test(main)
+  # cgal_add_compilation_test(tightiso)
 
 else()
 

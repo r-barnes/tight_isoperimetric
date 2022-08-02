@@ -23,3 +23,11 @@ make
 ```
 This may take a few minutes: CGAL and Boost rely heavily on template
 programming, which has slow compilation times.
+
+Running
+-----------
+```bash
+# First, make sure you're in the root directory of the project.
+./build/tightiso data/fig4_data.wkt
+./plot.py
+```
