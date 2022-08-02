@@ -1,5 +1,5 @@
 [submodule "submodules/graphlite"]
-	path = src/submodules/graphlite
+	path = submodules/graphlite
 	url = https://github.com/haasdo95/graphlite.git
 [submodule "misc/isoperimetric_profile"]
 	path = misc/isoperimetric_profile
