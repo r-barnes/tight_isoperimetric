@@ -42,5 +42,5 @@ if SHOW_FIGURE_BEING_ANALYZED:
     xs, ys = geom.exterior.xy
     ax.plot(xs, ys, '-ok', lw=4)
 
-
+plt.savefig("output.png")
 plt.show()
