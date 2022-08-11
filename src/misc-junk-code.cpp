@@ -1,5 +1,23 @@
 // TODO(r-barnes): Remove this file eventually
 
+
+  //Find local maxima
+  // std::vector<size_t> local_maxima;
+  // for (const auto&& [node, node_prop, neighbors_view]: mg) {
+  //   const auto [nbr_begin, nbr_end] = neighbors_view;
+  //   bool local_max = true;
+  //   for(auto nbr_it=nbr_begin; nbr_it!=nbr_end; ++nbr_it){
+  //     if(mg.node_prop(*nbr_it).distance > node_prop.distance){
+  //       local_max = false;
+  //       break;
+  //     }
+  //   }
+  //   if(local_max){
+  //     local_maxima.push_back(node);
+  //   }
+  // }
+
+
 void iterate_graph(const MedialGraph &mg){
   //Find local maxima
   // std::vector<size_t> local_maxima;

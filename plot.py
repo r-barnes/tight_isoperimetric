@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 
+import glob
 import math
 
 import matplotlib.pyplot as plt
 import numpy as np
 from shapely import wkt
 
-SHOW_FIGURE_BEING_ANALYZED = True
-SHOW_MEDIAL_GRAPH_SAMPLE_POINTS = True
-SHOW_MEDIAL_GRAPH_VERTICES_AND_LINE_SEGMENTS = True
+SHOW_FIGURE_BEING_ANALYZED = False
+SHOW_MEDIAL_GRAPH_SAMPLE_POINTS = False
+SHOW_MEDIAL_GRAPH_VERTICES_AND_LINE_SEGMENTS = False
+SHOW_POLY_HOLES = True
 
 fig, ax = plt.subplots()
+ax.axis('equal')
 
 # Output file from C++ medial axis code
-pts = np.loadtxt("voronoi_points.csv", skiprows=1, delimiter=',')
-
-
 if SHOW_MEDIAL_GRAPH_VERTICES_AND_LINE_SEGMENTS:
+  pts = np.loadtxt("voronoi_points.csv", skiprows=1, delimiter=',')
   ma = np.loadtxt("voronoi_edges.csv", dtype=int, skiprows=1, delimiter=',')
   for mal in ma:
     print(mal)
@@ -30,17 +31,45 @@ if SHOW_MEDIAL_GRAPH_SAMPLE_POINTS:
   # sample point from the edge of the figure and draws a circle around each
   # point. If the circles are all in the figure and cover it entirely, then
   # things are probably good. TODO(r-barnes): Make this pretty and uncommented
-  # for i in range(len(mgp[:,0])):
-  #   ax.text(mgp[i,0], mgp[i,1], s="{0:.2f}".format(math.sqrt(mgp[i,2])))
-  #   circle = plt.Circle((mgp[i,0], mgp[i,1]), math.sqrt(mgp[i,2]))
-  #   ax.add_patch(circle)
+  for i in range(len(mgp[:,0])):
+    ax.text(mgp[i,0], mgp[i,1], s="{0:.2f}".format(math.sqrt(mgp[i,2])))
+    circle = plt.Circle((mgp[i,0], mgp[i,1]), math.sqrt(mgp[i,2]), alpha=0.2)
+    ax.add_patch(circle)
 
+if SHOW_POLY_HOLES:
+  colors = ['#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928']
+  for i, filename in enumerate(glob.glob("polygon_w_holes_output_*.out")):
+    print(f"#####{i}")
+    data = np.loadtxt(filename)
+    print(data)
+    ax.plot(data[:,0], data[:,1], colors[i])
+
+
+# if SHOW_POLY_HOLES:
+#   with open("poly_holes.csv", "r") as fin:
+#     holes_data = fin.readlines()
+#   holes_data = [x.strip() for x in holes_data]
+#   # Identify shape by string prefix on line and remove said prefix
+#   circles = [x[7:] for x in holes_data if x.startswith("circle")]
+#   lines = [x[6:] for x in holes_data if x.startswith("line")]
+#   # Split up coordinates
+#   circles = [[float(c) for c in x.split(',')] for x in circles]
+#   lines = [[float(c) for c in x.split(',')] for x in lines]
+#   print(circles)
+#   print(lines)
+#   for x, y, sr in circles:
+#     print(x,y,sr)
+#     circle = plt.Circle((x, y), math.sqrt(sr), alpha=0.01)
+#     ax.add_patch(circle)
 
 if SHOW_FIGURE_BEING_ANALYZED:
   fig4 = wkt.loads(open("data/fig4_data.wkt").read())
   for geom in fig4.geoms:
     xs, ys = geom.exterior.xy
     ax.plot(xs, ys, '-ok', lw=4)
+
+
+
 
 
 plt.show()

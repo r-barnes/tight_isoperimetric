@@ -4,3 +4,6 @@
 [submodule "misc/isoperimetric_profile"]
 	path = misc/isoperimetric_profile
 	url = https://github.com/pzpzpzp1/isoperimetric_profile
+[submodule "submodules/doctest"]
+	path = submodules/doctest
+	url = https://github.com/doctest/doctest.git

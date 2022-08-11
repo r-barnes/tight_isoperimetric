@@ -1,20 +1,7 @@
 // Compile with: clang++ -DBOOST_ALL_NO_LIB -DCGAL_USE_GMPXX=1 -O2 -g -DNDEBUG -Wall -Wextra -pedantic -march=native -frounding-math main.cpp -lgmpxx -lmpfr -lgmp
-#include <CGAL/Boolean_set_operations_2.h>
-#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
-#include <CGAL/General_polygon_set_2.h>
-#include <CGAL/Gps_circle_segment_traits_2.h>
-#include <CGAL/IO/WKT.h>
-#include <CGAL/Polygon_with_holes_2.h>
-#include <CGAL/Segment_2.h>
-#include <CGAL/Segment_Delaunay_graph_2.h>
-#include <CGAL/Segment_Delaunay_graph_adaptation_policies_2.h>
-#include <CGAL/Segment_Delaunay_graph_adaptation_traits_2.h>
-#include <CGAL/Segment_Delaunay_graph_traits_2.h>
-#include <CGAL/squared_distance_2.h>
-#include <CGAL/Voronoi_diagram_2.h>
-#include <graph_lite.h>
+#include "geometry.hpp"
 
-#include <CGAL/Lazy_exact_nt.h>
+#include <graph_lite.h>
 
 #include <algorithm>
 #include <cmath>
@@ -27,36 +14,6 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
-
-typedef CGAL::Exact_predicates_exact_constructions_kernel              K;
-typedef CGAL::Segment_Delaunay_graph_traits_2<K>                       Gt;
-typedef CGAL::Segment_Delaunay_graph_2<Gt>                             SDG2;
-typedef CGAL::Segment_Delaunay_graph_adaptation_traits_2<SDG2>         AT;
-typedef CGAL::Segment_Delaunay_graph_degeneracy_removal_policy_2<SDG2> AP;
-typedef CGAL::Voronoi_diagram_2<SDG2, AT, AP>      VoronoiDiagram;
-typedef AT::Site_2                                 Site_2;
-typedef AT::Point_2                                Point_2;
-typedef CGAL::Segment_2<K>                         Segment_2;
-typedef VoronoiDiagram::Locate_result              Locate_result;
-typedef VoronoiDiagram::Vertex_handle              Vertex_handle;
-typedef VoronoiDiagram::Face_handle                Face_handle;
-typedef VoronoiDiagram::Halfedge_handle            Halfedge_handle;
-typedef VoronoiDiagram::Ccb_halfedge_circulator    Ccb_halfedge_circulator;
-typedef VoronoiDiagram::Bounded_halfedges_iterator BHE_Iter;
-typedef VoronoiDiagram::Halfedge                   Halfedge;
-typedef VoronoiDiagram::Vertex                     Vertex;
-typedef CGAL::Polygon_with_holes_2<K>              Polygon;
-typedef std::deque<Polygon>                        MultiPolygon;
-
-typedef K::Circle_2                                Circle_2;
-typedef K::Vector_2                                Vector_2;
-typedef CGAL::Gps_circle_segment_traits_2<K>       Traits_2;
-typedef CGAL::General_polygon_set_2<Traits_2>      Polygon_set_2;
-typedef Traits_2::General_polygon_2                Polygon_2;
-typedef Traits_2::General_polygon_with_holes_2     Polygon_with_holes_2;
-typedef Traits_2::Curve_2                          Curve_2;
-typedef Traits_2::X_monotone_curve_2               X_monotone_curve_2;
-
 
 /// Creates a hash of a Point_2, used for making O(1) point lookups
 // struct Point2Hash {
@@ -102,21 +59,6 @@ struct MedialPoint {
 
 
 typedef graph_lite::Graph<size_t, MedialPoint> MedialGraph;
-
-
-class Interpolator {
- public:
-  Interpolator(const Point_2 &a, const Point_2 &b) : a(a), b(b) {}
-  // Returns points interpolated from a at t=0 to b at t=1
-  Point_2 operator()(const double t) const {
-    const auto m = b - a;
-    return a + t * m;
-  }
- private:
-  Point_2 a;
-  Point_2 b;
-};
-
 
 
 /// Read well-known text from @p filename to obtain shape boundary
@@ -382,28 +324,6 @@ MedialData filter_voronoi_diagram_to_medial_axis(
 }
 
 
-/// Distance between a point and a line segment
-auto point_to_line_segment_distance(const Point_2 &pt, const Segment_2 &seg){
-  return CGAL::squared_distance(pt, seg);
-}
-
-
-/// Distance between two points
-auto point_to_point_distance(const Point_2 &a, const Point_2 &b){
-  return CGAL::squared_distance(a, b);
-}
-
-
-/// Distance between a point and a site
-auto point_to_site_distance(const Point_2 &pt, const Site_2 &site){
-  if (site.is_point()) {
-    return point_to_point_distance(pt, site.point());
-  } else {
-    return point_to_line_segment_distance(pt, site.segment());
-  }
-}
-
-
 /// Given 2 sites returns the minimum distance between the point and both of them
 auto point_to_min_site_distance(const Point_2 &pt, const Site_2 &site1, const Site_2 &site2){
   std::cout<<"dist "<<point_to_site_distance(pt, site1)<<" "<<point_to_site_distance(pt, site2)<<std::endl;
@@ -449,7 +369,7 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
     const auto &edge = md.edges.at(e);
     const auto &svh = md.vertex_handles.at(edge.first);  // Start vertex
     const auto &evh = md.vertex_handles.at(edge.second); // End vertex
-    Interpolator interp(svh->point(), evh->point());
+    InterPointInterpolator interp(svh->point(), evh->point());
     for(int t=1;t<STEPS;t++){
       // Location of the interpolated point
       const auto interp_point = interp(t/static_cast<double>(STEPS));
@@ -502,36 +422,113 @@ void print_medial_graph_points_and_distances(const MedialGraph &mg, const std::s
   }
 }
 
+/*
+void draw_arc(const Circle_2 &circle, const Point_2 &start, const Point_2 &end, std::ostream &fout){
+  constexpr auto STEPS = 10;
 
-void print_polygon_with_holes(const Polygon_with_holes_2 &pwh, std::string filename){
-  std::ofstream fout(filename);
-  fout<<std::setprecision(20);
-
-  const auto &outer_boundary = pwh.outer_boundary();
-  // std::cout<<outer_boundary.area()<<std::endl;
-  for(auto cit=outer_boundary.curves_begin();cit!=outer_boundary.curves_end();++cit){
-    // std::cout<<"cit area "<<cit->area()<<std::endl;
-    if(cit->is_linear()){
-      fout<<cit->source().x()<<","
-          <<cit->source().y()<<std::endl;
-          // <<cit->target().x()<<","
-          // <<cit->target().y()<<std::endl;
-    } else {
-      // Enable to show center lines
-      fout<<"circle "<<cit->supporting_circle().center().x()<<","<<cit->supporting_circle().center().y()<<std::endl;
-      continue;
-      if(cit->supporting_circle().orientation()==CGAL::COUNTERCLOCKWISE){
-        const Point_2 S(CGAL::to_double(cit->source().x()),CGAL::to_double(cit->source().y()));
-        const Point_2 T(CGAL::to_double(cit->target().x()),CGAL::to_double(cit->target().y()));
-        // fout<<T.x()<<","<<T.y()<<std::endl;
-        // draw_arc(cit->supporting_circle(), S, T, fout);
-      } else {
-        //TODO
-        std::cout<<"TODO"<<std::endl;
-      }
-    }
+  const Vector_2 x_axis(1,0);
+  const auto start_angle = 0; //CGAL::angle(start - circle.center(), x_axis);
+  const auto ang_diff = 2*M_PI; //CGAL::angle(start, circle.center(), end);
+  const auto cx = circle.center().x();
+  const auto cy = circle.center().y();
+  const auto radius = std::sqrt(CGAL::to_double(circle.squared_radius()));
+  // auto px = start.x();
+  // auto py = start.y();
+  for(int i=0;i<STEPS;i++){
+    const auto t = i / static_cast<double>(STEPS);
+    const auto x = cx + radius * std::cos(start_angle + ang_diff*t);
+    const auto y = cy + radius * std::sin(start_angle + ang_diff*t);
+    // fout<<px<<","<<py<<","<<x<<","<<y<<std::endl;
+    fout<<x<<","<<y<<std::endl;
+    // px = x;
+    // py = y;
   }
 }
+*/
+
+void iterate_graph(const MedialGraph &mg){
+  // Set up a max-heap priority-queue
+  const auto cmp = [&](const size_t left, const size_t right) {
+    return mg.node_prop(left).squared_distance > mg.node_prop(right).squared_distance;
+  };
+  std::priority_queue<size_t, std::vector<size_t>, decltype(cmp)> pq(cmp);
+
+  // Convenience function for getting the square distance of a medial graph node
+  const auto sdist = [&](const auto &node){
+    return mg.node_prop(node).squared_distance;
+  };
+
+  // Find maxima
+  //TODO: Identifies a single maximum distance point, which is maybe a bad
+  //      assumption!
+  {
+    std::vector<size_t> max_distance_nodes;
+    for(const auto &node: mg){
+      if(max_distance_nodes.empty() || sdist(max_distance_nodes.front()) == sdist(node)){
+        max_distance_nodes.push_back(node);
+      } else if (sdist(node) > sdist(max_distance_nodes.front())) {
+        max_distance_nodes.clear();         // Clear the priority queue
+        max_distance_nodes.push_back(node); // Add new most distant node
+      }
+    }
+
+    if(pq.size()>1){
+      std::cerr<<"More than one starting node had equal distance!"<<std::endl;
+    }
+
+    for(const auto &x: max_distance_nodes){
+      pq.push(x);
+    }
+  }
+
+  std::cerr<<"Maxima found = " << pq.size() << std::endl;
+
+  std::unordered_set<size_t> visited;
+
+  Polygon_set_2 gph;
+
+  while(!pq.empty()){
+    // Visit the next node
+    const auto c = pq.top();
+    pq.pop();
+
+    // Ensure we don't visit a node twice
+    if(visited.count(c)!=0){
+      continue;
+    }
+
+    // Make a note that we've visited this node
+    visited.insert(c);
+
+    // Get node properties
+    const auto &props = mg.node_prop(c);
+
+    std::cout<<"Visiting "<<props.pt<<" with sradius "<<props.squared_distance<<std::endl;
+
+    // If the node is just a point then we ignore it.
+    // TODO: Maybe we should look at the neighbours anyway.
+    if(props.squared_distance==0){
+      continue;
+    }
+
+    // Add this node's supporting circle to the figure we are building
+    gph.join(construct_polygon(props.pt, props.squared_distance));
+
+    // Add neighbours of the point to the queue
+    const auto [nbr_begin, nbr_end] = mg.neighbors(c);
+    for(auto n=nbr_begin;n!=nbr_end;++n){
+      if(visited.contains(*n)){
+        continue;
+      }
+      pq.push(*n);
+    }
+  }
+
+  std::cout<<"polygons = "<<gph.number_of_polygons_with_holes()<<std::endl;
+  print_polygon(gph, "polygon_w_holes_output");
+  std::cout<<"area = "<<area(gph)<<std::endl;
+}
+
 
 int main(int argc, char** argv) {
   if(argc!=2){
@@ -549,6 +546,8 @@ int main(int argc, char** argv) {
   print_medial_axis_points(ma_data, "voronoi_points.csv");
   print_medial_axis_edges(ma_data, "voronoi_edges.csv");
   print_medial_graph_points_and_distances(medial_graph, "medial_graph_points.csv");
+
+  iterate_graph(medial_graph);
 
   // Print out the sources on which those edges rely. A Voronoi edge can be
   // formed by constraints imposed by two edges, two points, or a point and an
