@@ -3,22 +3,14 @@
 
 #include "geometry.hpp"
 
-// #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
-// #include <CGAL/Gps_circle_segment_traits_2.h>
-// #include <CGAL/General_polygon_set_2.h>
-// #include <CGAL/Lazy_exact_nt.h>
 #include <cmath>
 #include <list>
-// typedef CGAL::Exact_predicates_exact_constructions_kernel Kernel;
-// typedef Kernel::Point_2                                   Point_2;
-// typedef Kernel::Circle_2                                  Circle_2;
-// typedef CGAL::Gps_circle_segment_traits_2<Kernel>         Traits_2;
-// typedef CGAL::General_polygon_set_2<Traits_2>             Polygon_set_2;
-// typedef Traits_2::General_polygon_2                       Polygon_2;
-// typedef Traits_2::General_polygon_with_holes_2            Polygon_with_holes_2;
-// typedef Traits_2::Curve_2                                 Curve_2;
-// typedef Traits_2::X_monotone_curve_2                      X_monotone_curve_2;
-// Construct a polygon from a circle.
+
+//For two circles of radii R and r and centered at (0,0) and (d,0) intersecting
+//in a region shaped like an asymmetric lens.
+constexpr double lens_area(const double r, const double R, const double d){
+  return r*r*std::acos((d*d+r*r-R*R)/2/d/r) + R*R*std::acos((d*d+R*R-r*r)/2/d/R) - 0.5*std::sqrt((-d+r+R)*(d+r-R)*(d-r+R)*(d+r+R));
+}
 
 TEST_CASE("area of four circles joined by rectangle (1 hole)") {
   // Insert four non-intersecting circles.
@@ -27,10 +19,10 @@ TEST_CASE("area of four circles joined by rectangle (1 hole)") {
   const auto circ2 = construct_polygon(Point_2(5, 1), 1);
   const auto circ3 = construct_polygon(Point_2(5, 5), 1);
   const auto circ4 = construct_polygon(Point_2(1, 5), 1);
-  S.insert(circ1);
-  S.insert(circ2);
-  S.insert(circ3);
-  S.insert(circ4);
+  S.join(circ1);
+  S.join(circ2);
+  S.join(circ3);
+  S.join(circ4);
   // Compute the union with four rectangles incrementally.
   const auto rect1 = construct_polygon(Point_2(1, 0), Point_2(5, 0),
                                        Point_2(5, 2), Point_2(1, 2));
@@ -47,6 +39,26 @@ TEST_CASE("area of four circles joined by rectangle (1 hole)") {
 
   CHECK(S.number_of_polygons_with_holes()==1);
   CHECK(CGAL::to_double(area(S)) == doctest::Approx(4 * 8 - 4 + M_PI));
+}
+
+TEST_CASE("area of two non-overlapping circles") {
+  Polygon_set_2 S;
+  const auto circ1 = construct_polygon(Point_2(0, 0), 1);
+  const auto circ2 = construct_polygon(Point_2(2, 2), 1);
+  S.join(circ1);
+  S.join(circ2);
+  CHECK(S.number_of_polygons_with_holes()==2);
+  CHECK(CGAL::to_double(area(S)) == doctest::Approx(2*M_PI));
+}
+
+TEST_CASE("area of two overlapping circles") {
+  Polygon_set_2 S;
+  const auto circ1 = construct_polygon(Point_2(0, 0), 1);
+  const auto circ2 = construct_polygon(Point_2(0.5, 0), 1);
+  S.join(circ1);
+  S.join(circ2);
+  CHECK(S.number_of_polygons_with_holes()==1);
+  CHECK(CGAL::to_double(area(S)) == doctest::Approx(2*M_PI - lens_area(1, 1, 0.5)));
 }
 
 TEST_CASE("point to point distance"){

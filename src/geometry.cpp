@@ -17,13 +17,11 @@ auto squared_distance(const Traits_2::Point_2& P1, const Traits_2::Point_2& P2){
 double area(const Polygon_2& P){
   double res = 0.0;
   for (auto it = P.curves_begin(); it != P.curves_end(); ++it){
+    const auto s = it->source();
+    const auto t = it->target();
     if (it->is_linear()){
-      const auto s = it->source();
-      const auto t = it->target();
       res += CGAL::to_double((s.x() - t.x()) * (s.y() + t.y()) / 2);
     } else if (it->is_circular()) {
-      const auto s = it->source();
-      const auto t = it->target();
       res += CGAL::to_double((s.x() - t.x()) * (s.y() + t.y()) / 2);
       const auto ds = CGAL::to_double(squared_distance(s, t));
       const auto rs = CGAL::to_double(it->supporting_circle().squared_radius());
@@ -124,6 +122,7 @@ void print_polygon(const Polygon_with_holes_2 &pwh, std::string filename){
     for(const auto &x: output){
       fout<<x<<std::endl;
     }
+    fout<<"#"<<std::endl;
   }
 }
 

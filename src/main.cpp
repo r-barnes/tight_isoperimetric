@@ -364,7 +364,7 @@ MedialGraph get_medial_axis_graph(const MedialData &md){
   // NOTE: No squared_distance should be -1 any more
 
   // Get distances to all other points and build a graph from there
-  constexpr auto STEPS = 100;
+  constexpr auto STEPS = 20;
   for(size_t e=0;e<md.edges.size();e++){
     const auto &edge = md.edges.at(e);
     const auto &svh = md.vertex_handles.at(edge.first);  // Start vertex
@@ -487,6 +487,7 @@ void iterate_graph(const MedialGraph &mg){
 
   Polygon_set_2 gph;
 
+  int step=0;
   while(!pq.empty()){
     // Visit the next node
     const auto c = pq.top();
@@ -514,6 +515,8 @@ void iterate_graph(const MedialGraph &mg){
     // Add this node's supporting circle to the figure we are building
     gph.join(construct_polygon(props.pt, props.squared_distance));
 
+    print_polygon(gph, "polygon_w_holes_output_step" + std::to_string(step));
+
     // Add neighbours of the point to the queue
     const auto [nbr_begin, nbr_end] = mg.neighbors(c);
     for(auto n=nbr_begin;n!=nbr_end;++n){
@@ -522,10 +525,11 @@ void iterate_graph(const MedialGraph &mg){
       }
       pq.push(*n);
     }
+
+    step++;
   }
 
   std::cout<<"polygons = "<<gph.number_of_polygons_with_holes()<<std::endl;
-  print_polygon(gph, "polygon_w_holes_output");
   std::cout<<"area = "<<area(gph)<<std::endl;
 }
 
