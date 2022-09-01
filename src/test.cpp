@@ -51,6 +51,26 @@ TEST_CASE("area of two non-overlapping circles") {
   CHECK(CGAL::to_double(area(S)) == doctest::Approx(2*M_PI));
 }
 
+TEST_CASE("area of two non-overlapping circles with radius 0.5") {
+  Polygon_set_2 S;
+  const auto circ1 = construct_polygon(Point_2(0, 0), 0.5);
+  const auto circ2 = construct_polygon(Point_2(2, 0), 0.5);
+  S.join(circ1);
+  S.join(circ2);
+  CHECK(S.number_of_polygons_with_holes()==1);
+  CHECK(CGAL::to_double(area(S)) == doctest::Approx(0.5*M_PI);
+}
+
+TEST_CASE("area of two non-overlapping circles with radius 2") {
+  Polygon_set_2 S;
+  const auto circ1 = construct_polygon(Point_2(0, 0), 2);
+  const auto circ2 = construct_polygon(Point_2(5, 0), 2);
+  S.join(circ1);
+  S.join(circ2);
+  CHECK(S.number_of_polygons_with_holes()==1);
+  CHECK(CGAL::to_double(area(S)) == doctest::Approx(8*M_PI);
+}
+
 TEST_CASE("area of two overlapping circles") {
   Polygon_set_2 S;
   const auto circ1 = construct_polygon(Point_2(0, 0), 1);
@@ -59,6 +79,16 @@ TEST_CASE("area of two overlapping circles") {
   S.join(circ2);
   CHECK(S.number_of_polygons_with_holes()==1);
   CHECK(CGAL::to_double(area(S)) == doctest::Approx(2*M_PI - lens_area(1, 1, 0.5)));
+}
+
+TEST_CASE("area of two overlapping circles with radius 2") {
+  Polygon_set_2 S;
+  const auto circ1 = construct_polygon(Point_2(0, 0), 2);
+  const auto circ2 = construct_polygon(Point_2(2, 0), 2);
+  S.join(circ1);
+  S.join(circ2);
+  CHECK(S.number_of_polygons_with_holes()==1);
+  CHECK(CGAL::to_double(area(S)) == doctest::Approx(8*M_PI - lens_area(2, 2, 2)));
 }
 
 TEST_CASE("point to point distance"){
