@@ -9,35 +9,63 @@
 using ACST = CGAL::Arr_circle_segment_traits_2_custom<K>;
 
 auto squared_distance(const Traits_2::Point_2& P1, const Traits_2::Point_2& P2){
-  const auto dx = P1.x() - P2.x();
-  const auto dy = P1.y() - P2.y();
+  const auto dx = CGAL::to_double(P1.x()) - CGAL::to_double(P2.x());
+  const auto dy = CGAL::to_double(P1.y()) - CGAL::to_double(P2.y());
   return dx * dx + dy * dy;
 }
 
-double area(const Polygon_2& P){
-  double res = 0.0;
-  for (auto it = P.curves_begin(); it != P.curves_end(); ++it){
-    const auto s = it->source();
-    const auto t = it->target();
-    if (it->is_linear()){
-      res += CGAL::to_double((s.x() - t.x()) * (s.y() + t.y()) / 2);
-    } else if (it->is_circular()) {
-      res += CGAL::to_double((s.x() - t.x()) * (s.y() + t.y()) / 2);
-      const auto ds = CGAL::to_double(squared_distance(s, t));
-      const auto rs = CGAL::to_double(it->supporting_circle().squared_radius());
-      const auto areaSector = rs * std::asin(CGAL::sqrt(ds) / (CGAL::sqrt(rs) * 2));
-      const auto areaTriangle = std::sqrt(ds) * std::sqrt(rs * 4 - ds) / 4;
-      res += (areaSector - areaTriangle);
-    }
+// ------ return signed area under the linear segment (P1, P2)
+auto area(Traits_2::Point_2 const& P1, Traits_2::Point_2 const& P2)
+{
+  auto const dx = CGAL::to_double(P1.x()) - CGAL::to_double(P2.x());
+  auto const sy = CGAL::to_double(P1.y()) + CGAL::to_double(P2.y());
+  return dx * sy / 2;
+}
+
+// ------ return signed area under the circular segment (P1, P2, C)
+auto area(Traits_2::Point_2 const& P1, Traits_2::Point_2 const& P2, Circle const& C)
+{
+  auto const dx = CGAL::to_double(P1.x()) - CGAL::to_double(P2.x());
+  auto const dy = CGAL::to_double(P1.y()) - CGAL::to_double(P2.y());
+  auto const squaredChord = dx * dx + dy * dy;
+  auto const chord = std::sqrt(squaredChord);
+  auto const squaredRadius = CGAL::to_double(C.squared_radius());
+  auto const areaSector = squaredRadius * std::asin(std::min(1.0, chord / (std::sqrt(squaredRadius) * 2)));
+  auto const areaTriangle = chord * std::sqrt(std::max(0.0, squaredRadius * 4 - squaredChord)) / 4;
+  auto const areaCircularSegment = areaSector - areaTriangle;
+  return area(P1, P2) + C.orientation() * areaCircularSegment;
+}
+
+// ------ return signed area under the X-monotone curve
+auto area(X_monotone_curve_2 const& XCV)
+{
+  if (XCV.is_linear())
+  {
+    return area(XCV.source(), XCV.target());
   }
+  else if (XCV.is_circular())
+  {
+    return area(XCV.source(), XCV.target(), XCV.supporting_circle());
+  }
+  else
+  {
+    return 0.0;
+  }
+}
+
+// ------ return area of the simple polygon
+auto area(Polygon_2 const& P)
+{
+  auto res = 0.0;
+  for (auto it = P.curves_begin(); it != P.curves_end(); ++it) res += area(*it);
   return res;
 }
 
-double area(const Polygon_with_holes_2& P){
-  double res = area(P.outer_boundary());
-  for (auto it = P.holes_begin(); it != P.holes_end(); ++it) {
-    res += area(*it);
-  }
+// ------ return area of the polygon with (optional) holes
+auto area(Polygon_with_holes_2 const& P)
+{
+  auto res = area(P.outer_boundary());
+  for (auto it = P.holes_begin(); it != P.holes_end(); ++it) res += area(*it);
   return res;
 }
 
