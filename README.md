@@ -11,6 +11,18 @@ conda install pip
 pip install matplotlib shapely
 ```
 
+
+Pre-commit hooks
+-------------
+To run pre-commit hooks run
+```
+pip3 install pre-commit
+pre-commit install
+```
+When you make a commit the code is automatically reformatted.
+
+
+
 Compilation
 -----------
 
@@ -23,6 +35,8 @@ make
 ```
 This may take a few minutes: CGAL and Boost rely heavily on template
 programming, which has slow compilation times.
+
+
 
 Running
 -----------
