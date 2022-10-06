@@ -51,8 +51,8 @@ TEST_CASE("area of two non-overlapping circles") {
 
 TEST_CASE("area of two non-overlapping circles with radius 0.5") {
   Polygon_set_2 S;
-  const auto circ1 = construct_polygon(Point_2(0, 0), 0.5);
-  const auto circ2 = construct_polygon(Point_2(2, 0), 0.5);
+  const auto circ1 = construct_polygon(Point_2(0, 0), 0.25);
+  const auto circ2 = construct_polygon(Point_2(2, 0), 0.25);
   S.join(circ1);
   S.join(circ2);
   CHECK(S.number_of_polygons_with_holes() == 1);
@@ -61,8 +61,8 @@ TEST_CASE("area of two non-overlapping circles with radius 0.5") {
 
 TEST_CASE("area of two non-overlapping circles with radius 2") {
   Polygon_set_2 S;
-  const auto circ1 = construct_polygon(Point_2(0, 0), 2);
-  const auto circ2 = construct_polygon(Point_2(5, 0), 2);
+  const auto circ1 = construct_polygon(Point_2(0, 0), 4);
+  const auto circ2 = construct_polygon(Point_2(5, 0), 4);
   S.join(circ1);
   S.join(circ2);
   CHECK(S.number_of_polygons_with_holes() == 1);
@@ -94,8 +94,8 @@ TEST_CASE("area of three overlapping circles") {
 
 TEST_CASE("area of two overlapping circles with radius 2") {
   Polygon_set_2 S;
-  const auto circ1 = construct_polygon(Point_2(0, 0), 2);
-  const auto circ2 = construct_polygon(Point_2(2, 0), 2);
+  const auto circ1 = construct_polygon(Point_2(0, 0), 4);
+  const auto circ2 = construct_polygon(Point_2(2, 0), 4);
   S.join(circ1);
   S.join(circ2);
   CHECK(S.number_of_polygons_with_holes() == 1);
